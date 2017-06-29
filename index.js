@@ -9,11 +9,30 @@ const mithril = require('mithril');
 const render = require('mithril-node-render');
 
 function BabelTransform(source) {
-  return transform(source, { "plugins": [["transform-react-jsx", { "pragma": "h" }]] });
+  return transform(source, {
+    "plugins": [
+      [
+        "transform-react-jsx", {
+          "pragma": "m"
+        }
+      ]
+    ]
+  });
 };
 
 function BootstrapSource(source) {
-  return "(function(h, sx) { return async function(it) {  \n return " + source + ";\n }; })";
+  return "(function(m, sx) { return async function(it) {  \n return " + source + ";\n }; })";
+}
+
+function resolveFileName(viewsPath, templateName) {
+  let possiblePaths = ['jsx', 'html'].map(p => path.join(viewsPath, templateName + '.' + p));
+
+  for (let i in possiblePaths) {
+    if (fs.existsSync(possiblePaths[i]))
+      return possiblePaths[i];
+  }
+
+  throw new Error('Template ' + templateName + ' not found.');
 }
 
 module.exports = class Templater {
@@ -22,21 +41,29 @@ module.exports = class Templater {
     this.viewsPath = viewsPath;
     this.templates = [];
     this.debug = debug || false;
+
+    this.include = this.executeTemplate;
+  }
+
+  async readAndCompileFile(templateName) {
+    let filePath = resolveFileName(this.viewsPath, templateName);
+
+    let file = fs
+      .readFileSync(filePath)
+      .toString();
+
+    let source = BootstrapSource(file);
+
+    let compiledSource = BabelTransform(source).code;
+
+    return eval(compiledSource)(mithril, this);
   }
 
   async compile(templateName) {
     try {
-      let templatePath = path.join(this.viewsPath, templateName + '.jsx');
+      let compiled = await this.readAndCompileFile(templateName);
 
-      if (!fs.existsSync(templatePath)) throw new Error('File does not exist');
-
-      let file = fs.readFileSync(templatePath).toString();
-
-      file = BootstrapSource(file);
-
-      let compiled = BabelTransform(file).code;
-
-      this.templates[templateName] = eval(compiled)(mithril, this);
+      this.templates[templateName] = compiled;
 
     } catch (e) {
       throw new Error('Error compiling template "' + templateName + '"\nError: ' + e.message);
@@ -44,7 +71,9 @@ module.exports = class Templater {
   }
 
   async render(templateName, model) {
-    return await render(await this.executeTemplate(templateName, model));
+    let executedTemplate = await this.executeTemplate(templateName, model);
+
+    return await render(executedTemplate);
   }
 
   async extends(templateBaseName, props) {
